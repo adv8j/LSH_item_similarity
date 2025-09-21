@@ -1,3 +1,4 @@
+from flask import Flask, request, jsonify
 import pandas as pd
 import re
 import random
@@ -193,81 +194,68 @@ class LSHFinder:
         similarities.sort(key=lambda x: x[1], reverse=True)
         return similarities[:top_n]
 
-# --- 3. Main Execution Block ---
 
-if __name__ == '__main__':
-    # Load and prepare the data
-    # Download the Appliances metadata from the link in the assignment [cite: 19, 20]
-    DATA_FILE = '../data/meta_Appliances.json' 
-    df = load_data(DATA_FILE)
-    print(df.columns)
-    df = df[['description','title','asin','similar_item','also_buy','also_view']]
-    df = df.drop_duplicates(subset='asin').reset_index(drop=True) # drop the duplicates and keep only the first occurance
 
-    # df['asin'] = df['asin'].astype(str)
 
-    # print(df[df['asin'] == "B00002N5EL"])
-    # exit()
+# -----------------------------
+# 3. Run the app
+# -----------------------------
+if __name__ == "__main__":
+    app = Flask(__name__)   
+    # -----------------------------
+    # 1. Load Data & Build Models
+    # -----------------------------
+    DATA_FILE = '../data/meta_Appliances.json'
+    df = pd.read_json(DATA_FILE, lines=True)
+    df = df[['description', 'title', 'asin', 'similar_item', 'also_buy', 'also_view']]
+    df = df.drop_duplicates(subset='asin').reset_index(drop=True)
 
-    # Fill NaN values to avoid errors during text processing
-    # df['title'] = df['title'].fillna('')
-    df.loc[df['description'].apply(lambda x: x == []), 'description'] = df['title'] # where description is empty
-    df = df.astype(str)
-    df = df.reset_index(drop=True)
-    # pd.set_option('display.max_columns', None)
-    # pd.set_option('display.max_colwidth', None)
-    # print(df.head(1))
-    # exit()
+    # Fix empty description
+    df.loc[df['description'].apply(lambda x: x == []), 'description'] = df['title']
+    df = df.astype(str).reset_index(drop=True)
 
-    # df['description'] = df['description'].fillna('')
-    
-    # Preprocess text fields
-    print("Preprocessing text fields...")
+    # Preprocess
     df['clean_title'] = df['title'].apply(preprocess_text)
     df['clean_description'] = df['description'].apply(preprocess_text)
-    print(df["clean_title"])
-
-    # Hybridize title and description (PSTD) using weighted concatenation 
-    # We give more weight to the title by repeating it 5 times.
     df['pstd_hybrid'] = (df['clean_title'] + ' ') * 5 + df['clean_description']
-    
-    # pd.set_option('display.max_columns', None)
-    # pd.set_option('display.max_colwidth', None)
-    # print(df.head(1)["clean_description"])
-    # exit()
-    # --- Example Usage for Exercise 2 ---
-    print("\n--- Building LSH model for Product Title Similarity (PST) ---")
-    # You can vary these parameters for Exercise 3
-    # K-character shingles [cite: 57], Number of hash functions [cite: 58], Parameters b & r [cite: 59]
-    lsh_pst = LSHFinder(products_df=df, num_hashes=30, k_shingle=3, bands=15)
-    lsh_pst.fit(field_name='clean_title')
-    
-    # Find a product to query. Preferably one with ground truth data.
-    # The assignment suggests finding a product with non-empty "also_buy" or "also_view" fields [cite: 27, 43]
-    query_product_asin = 'B00002N5EL' # Example ASIN, find a good one from your dataset
-    
-    if query_product_asin in df['asin'].values:
-        print(f"\nFinding similar products for ASIN: {query_product_asin} using PST...")
-        similar_items = lsh_pst.find_similar(query_product_asin, top_n=10)
-        
-        print("Top 10 similar products (PST):")
-        for asin, sim in similar_items:
-            product_title = df[df['asin'] == asin]['title'].iloc[0]
-            print(f"  ASIN: {asin}, Similarity: {sim:.3f}, Title: {product_title}")
-    else:
-        print(f"Query ASIN {query_product_asin} not found in the dataset.")
 
+    # Build LSH models
+    lsh_models = {
+        "pst": LSHFinder(products_df=df, num_hashes=30, k_shingle=3, bands=15),
+        "psd": LSHFinder(products_df=df, num_hashes=30, k_shingle=3, bands=15),
+        "pstd": LSHFinder(products_df=df, num_hashes=30, k_shingle=3, bands=15)
+    }
+    lsh_models["pst"].fit("clean_title")
+    lsh_models["psd"].fit("clean_description")
+    lsh_models["pstd"].fit("pstd_hybrid")
 
+    # -----------------------------
+    # 2. API Endpoint
+    # -----------------------------
+    @app.route("/api/similar", methods=["POST"])
+    def find_similar():
+        print("here ")
+        payload = request.get_json()
 
-    # You would repeat the process for PSD and PSTD
-    # print("\n--- Building LSH model for Product Description Similarity (PSD) ---")
-    # lsh_psd = LSHFinder(products_df=df, num_hashes=100, k_shingle=5, bands=20)
-    # lsh_psd.fit(field_name='clean_description')
-    # similar_items_psd = lsh_psd.find_similar(query_product_asin, top_n=10)
-    # print(similar_items_psd)
-    
-    # print("\n--- Building LSH model for Hybrid Similarity (PSTD) ---")
-    # lsh_pstd = LSHFinder(products_df=df, num_hashes=100, k_shingle=5, bands=20)
-    # lsh_pstd.fit(field_name='pstd_hybrid')
-    # similar_items_pstd = lsh_pstd.find_similar(query_product_asin, top_n=10)
-    # print(similar_items_pstd)
+        mode = payload.get("mode")
+        product_id = payload.get("product_id")
+        method = payload.get("method")
+        k = payload.get("k", 10)
+
+        if method not in lsh_models:
+            return jsonify({"error": "Invalid method"}), 400
+
+        if mode != "by_id":
+            return jsonify({"error": "Only mode=by_id is supported"}), 400
+
+        if product_id not in df["asin"].values:
+            return jsonify({"error": "Product not found"}), 404
+
+        model = lsh_models[method]
+        similar_items = model.find_similar(product_id, top_n=k)
+
+        # Only return ASIN IDs
+        results = [asin for asin, sim in similar_items]
+
+        return jsonify({"results": results})
+    app.run(host="0.0.0.0", port=5000, debug=True)
