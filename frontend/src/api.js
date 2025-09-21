@@ -5,7 +5,7 @@ import axios from 'axios';
  * Set USE_MOCK = false and BASE_URL to your backend to call a real API.
  */
 const USE_MOCK = false;
-const BASE_URL = ''; // e.g. "http://localhost:5000"
+const BASE_URL = 'http://127.0.0.1:5000'; // e.g. "http://localhost:5000"
 
 /**
  * Helpers to generate deterministic mock data from asin/index.
@@ -107,7 +107,7 @@ export async function getProduct(asin){
  * Response:
  *  { query_id, query_product, method, k, results: [product objects], metrics: {...} }
  */
-export async function findSimilar({ mode='by_id', product_id, product, method='PST', k=5 } = {}){
+export async function findSimilar({ mode='by_id', product_id, product, method='pst', k=5 } = {}){
   // if (USE_MOCK){
   //   // create k mock results (avoid returning the same asin as query if by_id)
   //   const results = [];

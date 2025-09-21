@@ -12,7 +12,6 @@ from flask_cors import CORS
 
 # Data Loading and Preprocessing
 def load_data(file_path):
-    """Loads the Amazon Appliances metadata from the .json.gz file."""
     print(f"Loading data from {file_path}...")
 
     return pd.read_json(file_path, lines=True)
@@ -35,8 +34,6 @@ def preprocess_text(text):
 
 class LSHFinder:
     def __init__(self, products_df, num_hashes=100, k_shingle=5, bands=20, seed=42):
-        if num_hashes % bands != 0:
-            raise ValueError("Number of hashes must be divisible by the number of bands.")
         
         self.products_df = products_df.copy()
         self.num_hashes = num_hashes
