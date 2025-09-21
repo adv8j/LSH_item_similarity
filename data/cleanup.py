@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 input_file = Path("cl1.json")   # change to your file
 output_file = Path("cl1_clean.json")
 
-# ✅ Directly load the JSON array
+
 with input_file.open() as f:
     data = json.load(f)
 
@@ -39,6 +39,8 @@ for item in data:
         "rank": item.get("rank"),
         "price": item.get("price"),
         "image_URL": item.get("imageURLHighRes"),
+        "also_view": item.get("also_view", []),
+        "also_buy": item.get("also_buy", [])
     }
 
     tech1 = parse_html_table(item.get("tech1", ""))
@@ -51,4 +53,4 @@ for item in data:
 with output_file.open("w") as f:
     json.dump(cleaned, f, indent=2)
 
-print(f"✅ Cleaned {len(cleaned)} items → {output_file}")
+print(f"Cleaned {len(cleaned)} items → {output_file}")
