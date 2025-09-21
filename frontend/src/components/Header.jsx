@@ -8,7 +8,7 @@ export default function Header(){
         <Link to="/" className="text-lg font-bold">LSH Item Similarity</Link>
         <nav className="text-sm">
           <Link to="/" className="mr-4">Products</Link>
-          <a href="#" className="text-gray-500">Docs</a>
+          {/* <a href="#" className="text-gray-500">Docs</a> */}
         </nav>
       </div>
     </header>

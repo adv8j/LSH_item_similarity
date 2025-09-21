@@ -108,7 +108,7 @@ export default function ProductDetail(){
   return (
     <div>
       <div className="flex gap-6 mb-6">
-        <div className="relative overflow-hidden w-80 h-52 rounded shadow">
+        <div className="relative overflow-hidden w-96 h-75 rounded shadow flex-shrink-0">
           <img 
             src={images[currentImageIndex]} 
             alt={product.title} 
@@ -141,20 +141,10 @@ export default function ProductDetail(){
           {/* <div className="mt-1 text-sm text-gray-600">Sales Rank: {product.salesRank ? JSON.stringify(product.salesRank) : 'NA'}</div> */}
         </div>
       </div>
-
+      
       <section className="mb-6 bg-white p-4 rounded shadow">
         <h2 className="text-lg font-medium mb-2">Full details</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
-          <div>
-            <h3 className="font-semibold">Features</h3>
-            {product.feature && product.feature.length > 0 ? (
-              <ul className="list-disc ml-5">
-                {product.feature.map((f, idx)=>(<li key={idx}>{f}</li>))}
-              </ul>
-            ) : (
-              <div className="text-gray-500">No features available</div>
-            )}
-          </div>
           <div>
             <h3 className="font-semibold">Categories</h3>
             <div>{product.category && product.category.length > 0 ? product.category.join(' > ') : 'NA'}</div>
@@ -165,6 +155,9 @@ export default function ProductDetail(){
               <div><strong>Brand:</strong> {product.brand || 'N/A'}</div>
               <div><strong>Price:</strong> {displayPrice}</div>
             </div>
+          </div>
+          <div>
+            {/* Empty right column or add other content here */}
           </div>
         </div>
       </section>
