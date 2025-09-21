@@ -19,7 +19,7 @@ echo "Activating the virtual environment..."
 source $ENV_NAME/bin/activate
 # install required packages
 echo "installing required packages ..."
-pip install pandas tqdm flask
+pip install pandas tqdm flask flask-cors
 if [ $? -ne 0 ]; then
     echo "Error: Failed to install required packages."
     deactivate

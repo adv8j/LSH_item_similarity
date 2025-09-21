@@ -8,7 +8,7 @@ from collections import defaultdict
 from tqdm import tqdm
 import time
 import html
-
+from flask_cors import CORS
 
 # Data Loading and Preprocessing
 def load_data(file_path):
@@ -151,6 +151,8 @@ class LSHFinder:
             if exact_j > 0:
                 sims.append((self.idx_to_asin[c], exact_j))
         sims.sort(key=lambda x: x[1], reverse=True)
+
+        print("DEBUG: All similar products: \n","Length: ",len(sims),"\n",sims)
         return sims[:top_n]
 
     def fit(self, field_name):
@@ -162,7 +164,8 @@ class LSHFinder:
 
 
 if __name__ == "__main__":
-    app = Flask(__name__)   
+    app = Flask(__name__)  
+    CORS(app) # allow all origins 
     DATA_FILE = '../data/meta_Appliances.json'
     df = pd.read_json(DATA_FILE, lines=True)
     df = df[['description', 'title', 'asin', 'similar_item', 'also_buy', 'also_view']]
@@ -175,13 +178,13 @@ if __name__ == "__main__":
     # Preprocess
     df['clean_title'] = df['title'].apply(preprocess_text)
     df['clean_description'] = df['description'].apply(preprocess_text)
-    df['pstd_hybrid'] = (df['clean_title'] + ' ') * 5 + df['clean_description']
+    df['pstd_hybrid'] = (df['clean_title'] + ' ') * 3 + df['clean_description']
 
     # Build LSH models
     lsh_models = {
-        "pst": LSHFinder(products_df=df, num_hashes=30, k_shingle=3, bands=15),
-        "psd": LSHFinder(products_df=df, num_hashes=30, k_shingle=3, bands=15),
-        "pstd": LSHFinder(products_df=df, num_hashes=30, k_shingle=3, bands=15)
+        "pst": LSHFinder(products_df=df, num_hashes=120, k_shingle=7, bands=30),
+        "psd": LSHFinder(products_df=df, num_hashes=120, k_shingle=7, bands=30),
+        "pstd": LSHFinder(products_df=df, num_hashes=120, k_shingle=7, bands=30)
     }
     lsh_models["pst"].fit("clean_title")
     lsh_models["psd"].fit("clean_description")
@@ -190,7 +193,6 @@ if __name__ == "__main__":
     # api endpoint
     @app.route("/api/similar", methods=["POST"])
     def find_similar():
-        print("here ")
         payload = request.get_json()
 
         mode = payload.get("mode")
@@ -214,4 +216,4 @@ if __name__ == "__main__":
         results = [asin for asin, sim in similar_items]
 
         return jsonify({"results": results})
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=False)
