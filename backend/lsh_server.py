@@ -1,3 +1,5 @@
+import zlib
+import random
 from flask import Flask, request, jsonify
 import pandas as pd
 import re
@@ -7,22 +9,18 @@ from tqdm import tqdm
 import time
 import html
 
-# --- 1. Data Loading and Preprocessing ---
 
+# Data Loading and Preprocessing
 def load_data(file_path):
     """Loads the Amazon Appliances metadata from the .json.gz file."""
     print(f"Loading data from {file_path}...")
-    # The site provides code to help with loading the data [cite: 21]
+
     return pd.read_json(file_path, lines=True)
 
 def preprocess_text(text):
-    """
-    Cleans text by removing HTML tags, converting to lowercase, 
-    and removing non-alphanumeric characters.
-    """
+
     if not isinstance(text, str):
         return ""
-    # Strip HTML tags [cite: 23]
     # text = re.sub('<[^<]+?>', ' ', text)
     text = html.unescape(text)
 
@@ -35,15 +33,8 @@ def preprocess_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# --- 2. LSH Core Logic ---
-
 class LSHFinder:
-    """
-    A class to find similar products using Locality-Sensitive Hashing.
-    The overall goal is to use LSH to find similar products[cite: 5].
-    """
-    def __init__(self, products_df, num_hashes=100, k_shingle=5, bands=20):
-        # Hyperparameters for evaluation are specified in the assignment [cite: 57, 58, 59]
+    def __init__(self, products_df, num_hashes=100, k_shingle=5, bands=20, seed=42):
         if num_hashes % bands != 0:
             raise ValueError("Number of hashes must be divisible by the number of bands.")
         
@@ -55,156 +46,123 @@ class LSHFinder:
         
         self.asin_to_idx = {asin: i for i, asin in enumerate(self.products_df['asin'])}
         self.idx_to_asin = {i: asin for asin, i in self.asin_to_idx.items()}
-        print("DEBUG: len of asin_to_idx: ",len(self.asin_to_idx), " and idx_to_asin: ",len(self.idx_to_asin))
-        print(self.asin_to_idx["B00002N5EL"])
-        print(self.idx_to_asin[4])
-        # Initialize internal data structures
-        self.shingles = {}
+        # print("DEBUG: len of asin_to_idx: ",len(self.asin_to_idx), " and idx_to_asin: ",len(self.idx_to_asin))
+        # print(self.asin_to_idx["B00002N5EL"])
+        # print(self.idx_to_asin[4])
+        random.seed(seed)
+        self.large_prime = 4294967311  # prime > 2^32
+        self.shingles = {}             # will store shingles by index
         self.signatures = None
         self.lsh_buckets = defaultdict(set)
-        
         self._generate_hash_functions()
 
+    # seeded 
     def _generate_hash_functions(self):
-        """Creates a list of hash functions for MinHashing."""
         self.hash_funcs = []
-        # A large prime number for the hash function domain
-        large_prime = 4294967291 
-        # large_prime = 2147483647 
-
         for _ in range(self.num_hashes):
-            a = random.randint(1, large_prime - 1)
-            b = random.randint(0, large_prime - 1)
-            self.hash_funcs.append(lambda x, a=a, b=b, p=large_prime: (a * x + b) % p)
+            a = random.randint(1, self.large_prime - 1)
+            b = random.randint(0, self.large_prime - 1)
+            # keep a,b captured as defaults
+            self.hash_funcs.append(lambda x, a=a, b=b, p=self.large_prime: (a * (x & 0xffffffff) + b) % p)
+
 
     def _create_shingles(self, text):
-        """Creates a set of k-character shingles from a given text."""
-        shingles = set()
+        if not isinstance(text, str) or text == "":
+            return set()
+        s = set()
         if len(text) < self.k_shingle:
-            return shingles
+
+            s.add(zlib.crc32(text.encode('utf8')) & 0xffffffff) # so that it is positive
+            return s
         for i in range(len(text) - self.k_shingle + 1):
-            shingle = text[i:i+self.k_shingle]
-            # Hash the shingle to an integer to use with our hash functions
-            shingles.add(hash(shingle))
-        return shingles
+            sh = text[i:i+self.k_shingle]
+            s.add(zlib.crc32(sh.encode('utf8')) & 0xffffffff) # so that it is positive
+        return s
 
     def _build_minhash_signatures(self, field_name):
-        """Builds the MinHash signature matrix for a specified text field."""
         num_products = len(self.products_df)
-        print(f"Building MinHash signatures for {num_products} products on field '{field_name}'...")
-        
-        # Initialize signature matrix with infinity
-        self.signatures = [[float('inf')] * num_products for _ in range(self.num_hashes)]
-        
-        for idx, row in tqdm(self.products_df.iterrows(), total=num_products, desc="Shingling & Hashing"):
+        self.signatures = [[None] * num_products for _ in range(self.num_hashes)]
+        for idx in tqdm(range(num_products), total=num_products,desc="Shingling & Hashing"):
+            row = self.products_df.iloc[idx]
             text = row[field_name]
-            # Create shingles for the current product's text
             product_shingles = self._create_shingles(text)
+            self.shingles[idx] = product_shingles
             if not product_shingles:
                 continue
+            for sh in product_shingles:
+                for i, hf in enumerate(self.hash_funcs):
+                    hval = hf(sh)
+                    cur = self.signatures[i][idx]
+                    if cur is None or hval < cur:
+                        self.signatures[i][idx] = hval
 
-            # For each shingle, compute its hash values
-            for shingle in product_shingles:
-                for i, hash_func in enumerate(self.hash_funcs):
-                    hash_val = hash_func(shingle)
-                    # Update the signature if we found a smaller hash value
-                    if hash_val < self.signatures[i][idx]:
-                        self.signatures[i][idx] = hash_val
-                        
     def _build_lsh(self):
-        """Builds the LSH buckets for finding candidate pairs."""
         if self.signatures is None:
-            raise ValueError("MinHash signatures must be built first.")
-        
-        print("Building LSH buckets...")
+            raise ValueError("build signatures first")
         num_products = len(self.products_df)
-        
         for b in tqdm(range(self.bands), desc="Banding"):
-            start_row = b * self.rows_per_band
-            end_row = start_row + self.rows_per_band
-            
+            start = b * self.rows_per_band
+            end = start + self.rows_per_band
             for prod_idx in range(num_products):
-                # Extract the portion of the signature for the current band
-                band_signature = tuple(self.signatures[i][prod_idx] for i in range(start_row, end_row))
-                
-                # Hash the band signature to a bucket key
-                # We add the band index to the key to avoid collisions between bands
-                bucket_key = (b, hash(band_signature))
-                
+                band_vals = tuple(self.signatures[i][prod_idx] for i in range(start, end))
+                if any(v is None for v in band_vals):
+                    continue
+                bucket_key = (b, band_vals)   # exact tuple as key
                 self.lsh_buckets[bucket_key].add(prod_idx)
 
+    # MinHash Jaccard estimator
+    def _estimate_jaccard(self, sig1, sig2):
+        valid = 0
+        matches = 0
+        for a, b in zip(sig1, sig2):
+            if a is None or b is None:
+                continue
+            valid += 1
+            if a == b:
+                matches += 1
+        if valid == 0:
+            return 0.0
+        return matches / valid
+
+    # get candidates via LSH, then compute exact Jaccard on stored shingles for ranking
+    def find_similar(self, asin, top_n=10):
+        if asin not in self.asin_to_idx:
+            return []
+        qidx = self.asin_to_idx[asin]
+        query_sig = [self.signatures[i][qidx] for i in range(self.num_hashes)]
+        candidates = set()
+        for b in range(self.bands):
+            start = b * self.rows_per_band
+            end = start + self.rows_per_band
+            band_sig = tuple(self.signatures[i][qidx] for i in range(start, end))
+            if any(v is None for v in band_sig):
+                continue
+            bucket_key = (b, band_sig)
+            candidates.update(self.lsh_buckets.get(bucket_key, set()))
+        candidates.discard(qidx)
+
+        q_sh = self.shingles.get(qidx, set())
+        sims = []
+        for c in candidates:
+            c_sh = self.shingles.get(c, set())
+            if not q_sh or not c_sh:
+                continue
+            exact_j = len(q_sh & c_sh) / len(q_sh | c_sh)
+            if exact_j > 0:
+                sims.append((self.idx_to_asin[c], exact_j))
+        sims.sort(key=lambda x: x[1], reverse=True)
+        return sims[:top_n]
+
     def fit(self, field_name):
-        """Runs the full pipeline: MinHashing and LSH."""
         start_time = time.time()
         self._build_minhash_signatures(field_name)
         self._build_lsh()
         end_time = time.time()
         print(f"LSH model built in {end_time - start_time:.2f} seconds.")
-    
-    def _estimate_jaccard(self, sig1, sig2):
-        """Estimates Jaccard similarity from two MinHash signatures."""
-        # The signatures are columns, so we need to compare them element-wise
-        matching_hashes = sum(s1 == s2 for s1, s2 in zip(sig1, sig2))
-        return matching_hashes / self.num_hashes
-
-    def find_similar(self, asin, top_n=10):
-        """Finds top_n similar products for a given ASIN."""
-        if asin not in self.asin_to_idx:
-            return f"Product with ASIN '{asin}' not found."
-            
-        query_idx = self.asin_to_idx[asin]
-        print("DEBUG: Query idx: ",query_idx," for ASIN: ",asin)
-        query_signature = [self.signatures[i][query_idx] for i in range(self.num_hashes)]
-        print("DEBUG: Query sign: \n",query_signature,"\n for ASIN: ",asin)
-        # 1. Find candidate pairs using LSH buckets
-        candidate_indices = set()
-        for b in range(self.bands):
-            start_row = b * self.rows_per_band
-            end_row = start_row + self.rows_per_band
-            band_signature = tuple(self.signatures[i][query_idx] for i in range(start_row, end_row))
-            bucket_key = (b, hash(band_signature))
-            
-            # Add all products from the matching bucket as candidates
-            candidates_in_bucket = self.lsh_buckets.get(bucket_key, set())
-            candidate_indices.update(candidates_in_bucket)
-            print("DEBUG: In the iter: Len of new cand: ",len(candidates_in_bucket), "total len: ",len(candidate_indices))
-        print("DEBUG: Final Len of candidates: ",len(candidate_indices))
-        # Remove the query product itself from candidates
-        candidate_indices.discard(query_idx)
-        
-        # 2. Refine by calculating Jaccard similarity for candidates only
-        similarities = []
-        for candidate_idx in candidate_indices:
-            candidate_signature = [self.signatures[i][candidate_idx] for i in range(self.num_hashes)]
-            similarity = self._estimate_jaccard(query_signature, candidate_signature)
-            if similarity > 0: # Only consider items with some similarity
-                # print("DEBUG: len of asin_to_idx: ",len(self.asin_to_idx), " and idx_to_asin: ",len(self.idx_to_asin))
-                # print("First 10 keys using a for loop:")
-                # count = 0
-                # for key in self.idx_to_asin.keys():
-                #     if count >= 10:
-                #         break
-                #     print(key)
-                #     count += 1
 
 
-                similarities.append((self.idx_to_asin[candidate_idx], similarity))
-
-        # 3. Sort by similarity and return top N
-        similarities.sort(key=lambda x: x[1], reverse=True)
-        return similarities[:top_n]
-
-
-
-
-# -----------------------------
-# 3. Run the app
-# -----------------------------
 if __name__ == "__main__":
     app = Flask(__name__)   
-    # -----------------------------
-    # 1. Load Data & Build Models
-    # -----------------------------
     DATA_FILE = '../data/meta_Appliances.json'
     df = pd.read_json(DATA_FILE, lines=True)
     df = df[['description', 'title', 'asin', 'similar_item', 'also_buy', 'also_view']]
@@ -229,9 +187,7 @@ if __name__ == "__main__":
     lsh_models["psd"].fit("clean_description")
     lsh_models["pstd"].fit("pstd_hybrid")
 
-    # -----------------------------
-    # 2. API Endpoint
-    # -----------------------------
+    # api endpoint
     @app.route("/api/similar", methods=["POST"])
     def find_similar():
         print("here ")
