@@ -1,3 +1,4 @@
+from rouge_score import rouge_scorer
 import zlib
 import random
 from flask import Flask, request, jsonify
@@ -12,7 +13,6 @@ from flask_cors import CORS
 
 # Data Loading and Preprocessing
 def load_data(file_path):
-    """Loads the Amazon Appliances metadata from the .json.gz file."""
     print(f"Loading data from {file_path}...")
 
     return pd.read_json(file_path, lines=True)
@@ -97,8 +97,6 @@ class LSHFinder:
                         self.signatures[i][idx] = hval
 
     def _build_lsh(self):
-        if self.signatures is None:
-            raise ValueError("build signatures first")
         num_products = len(self.products_df)
         for b in tqdm(range(self.bands), desc="Banding"):
             start = b * self.rows_per_band
@@ -162,6 +160,41 @@ class LSHFinder:
         end_time = time.time()
         print(f"LSH model built in {end_time - start_time:.2f} seconds.")
 
+
+
+def calculate_precision_at_k(predicted_ids, ground_truth_ids, k=10):
+
+    # Take the top k predicted IDs
+    top_k_predicted = predicted_ids[:k]
+    
+    # Convert lists to sets for efficient intersection
+    predicted_set = set(top_k_predicted)
+    ground_truth_set = set(ground_truth_ids)
+    
+    # Find the number of relevant items
+    relevant_items_count = len(predicted_set.intersection(ground_truth_set))
+    
+    # Calculate precision
+    return relevant_items_count / k
+
+# rouge type can be 'rouge1' 'rouge2' 'rougeL'
+def calculate_rouge(predicted_titles, ground_truth_titles, rouge_type):
+
+    if not predicted_titles or not ground_truth_titles:
+        return 0.0
+
+    # init the scorer for all required ROUGE types at once
+    scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+    total_score = 0.0
+    for pred_title in predicted_titles:
+        best_score = 0.0
+        for gt_title in ground_truth_titles:
+            # calculate score and extract the f-measure for the specified rouge_type
+            score = scorer.score(gt_title, pred_title)[rouge_type].fmeasure
+            if score > best_score:
+                best_score = score
+        total_score += best_score
+    return total_score / len(predicted_titles)
 
 if __name__ == "__main__":
     app = Flask(__name__)  
